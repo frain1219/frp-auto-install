@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    name: Build & lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint build.sh
+        run: shellcheck build.sh
+
+      - name: Run build (build.sh internally runs shellcheck on the assembled frp-installer.sh)
+        run: ./build.sh
+
+      - name: Drift check — frp-installer.sh must match lib/
+        run: |
+          if ! git diff --exit-code -- frp-installer.sh; then
+            echo ""
+            echo "::error::frp-installer.sh is out of sync with lib/."
+            echo "请在本地执行 ./build.sh 并 commit 重新生成的 frp-installer.sh"
+            exit 1
+          fi

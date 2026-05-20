@@ -44,7 +44,7 @@ if ! bash -n "$TMP"; then
     exit 1
 fi
 
-# shellcheck (可选)
+# 可选: 用 shellcheck 校验拼接产物
 if command -v shellcheck >/dev/null 2>&1; then
     if ! shellcheck "$TMP"; then
         echo "[build] shellcheck 校验失败, 已放弃生成" >&2

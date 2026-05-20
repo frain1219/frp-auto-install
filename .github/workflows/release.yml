@@ -1,0 +1,62 @@
+name: Release latest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build and publish rolling latest release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Build single-file installer
+        run: ./build.sh
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          {
+            echo "## frp-installer.sh — rolling \`latest\`"
+            echo ""
+            echo "由 main 分支自动构建发布,每次 push 滚动覆盖。"
+            echo ""
+            echo "**直接下载使用:**"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/frp-installer.sh -o frp-installer.sh"
+            echo "sudo bash frp-installer.sh"
+            echo '```'
+            echo ""
+            echo "### 本次构建"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- 时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- 文件 sha256:"
+            echo '```'
+            sha256sum frp-installer.sh
+            echo '```'
+          } > RELEASE_NOTES.md
+
+      - name: Publish rolling latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest build"
+          body_path: RELEASE_NOTES.md
+          files: frp-installer.sh
+          prerelease: false
+          make_latest: "true"

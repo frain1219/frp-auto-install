@@ -1,5 +1,8 @@
 # frp-auto-install
 
+[![CI](https://github.com/frain1219/frp-auto-install/actions/workflows/ci.yml/badge.svg)](https://github.com/frain1219/frp-auto-install/actions/workflows/ci.yml)
+[![Release](https://github.com/frain1219/frp-auto-install/actions/workflows/release.yml/badge.svg)](https://github.com/frain1219/frp-auto-install/releases/latest)
+
 一个一键安装与运维 [frp](https://github.com/fatedier/frp) 的 Bash 脚本。无运维经验也能在 1 分钟内完成内网穿透部署。
 
 参考官方文档: https://gofrp.org/zh-cn/docs/
@@ -21,6 +24,21 @@
 - 不支持 macOS / Windows / 无 systemd 的精简发行版
 
 ## 快速开始
+
+### 一行下载并运行
+
+每次 main 分支推送都会通过 GitHub Actions 自动构建并发布到 `latest` release,可直接下载使用:
+
+```bash
+curl -fsSL https://github.com/frain1219/frp-auto-install/releases/latest/download/frp-installer.sh -o frp-installer.sh
+sudo bash frp-installer.sh
+```
+
+或者一行流式执行:
+
+```bash
+curl -fsSL https://github.com/frain1219/frp-auto-install/releases/latest/download/frp-installer.sh | sudo bash
+```
 
 ### 服务端 (拥有公网 IP 的机器)
 
