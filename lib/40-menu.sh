@@ -246,6 +246,127 @@ op_show_connections() {
     print_proxies_from_api "udp"
 }
 
+# ===== 防火墙管理 =====
+detect_firewall() {
+    # echo 防火墙类型: ufw | firewalld | iptables | none
+    if command -v ufw >/dev/null 2>&1; then
+        echo "ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        echo "firewalld"
+    elif command -v iptables >/dev/null 2>&1; then
+        echo "iptables"
+    else
+        echo "none"
+    fi
+}
+
+firewall_status() {
+    # echo "active" | "inactive" | "unknown"
+    local fw="$1"
+    case "$fw" in
+        ufw)
+            # ufw status 输出: "Status: active" 或 "Status: inactive"
+            if ufw status 2>/dev/null | grep -qi "Status: active"; then
+                echo "active"
+            else
+                echo "inactive"
+            fi
+            ;;
+        firewalld)
+            if systemctl is-active --quiet firewalld; then
+                echo "active"
+            else
+                echo "inactive"
+            fi
+            ;;
+        iptables)
+            # 纯 iptables: 看是否有非默认规则
+            local count
+            count=$(iptables -S 2>/dev/null | grep -cvE '^-[PN] |^-N ')
+            if [[ "${count:-0}" -gt 0 ]]; then echo "active"; else echo "inactive"; fi
+            ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+op_firewall() {
+    local fw status
+    fw=$(detect_firewall)
+
+    log_step "防火墙状态"
+    if [[ "$fw" == "none" ]]; then
+        log_warn "未检测到 ufw / firewalld / iptables 任一防火墙工具"
+        return
+    fi
+
+    status=$(firewall_status "$fw")
+    print_kv "防火墙类型" "$fw"
+    case "$status" in
+        active)   print_kv "运行状态"   "${C_GREEN}已开启${C_RESET}" ;;
+        inactive) print_kv "运行状态"   "${C_YELLOW}已关闭${C_RESET}" ;;
+        *)        print_kv "运行状态"   "${status}" ;;
+    esac
+
+    # 额外信息: ufw / firewalld 列出已放行端口
+    case "$fw" in
+        ufw)
+            if [[ "$status" == "active" ]]; then
+                echo ""
+                log_info "已配置规则:"
+                ufw status numbered 2>/dev/null | sed 's/^/  /'
+            fi
+            ;;
+        firewalld)
+            if [[ "$status" == "active" ]]; then
+                echo ""
+                log_info "已放行端口 (public zone):"
+                firewall-cmd --list-ports 2>/dev/null | sed 's/^/  /'
+            fi
+            ;;
+    esac
+
+    [[ "$status" != "active" ]] && return
+
+    echo ""
+    log_warn "${C_BOLD}⚠ 警告: 关闭防火墙将暴露本机所有端口给公网, 仅在你充分理解风险时操作${C_RESET}"
+    log_warn "如仅需放行 frp 端口, 推荐使用以下命令而非直接关闭防火墙:"
+    case "$fw" in
+        ufw)
+            log_warn "  ufw allow <端口>/tcp"
+            ;;
+        firewalld)
+            log_warn "  firewall-cmd --permanent --add-port=<端口>/tcp && firewall-cmd --reload"
+            ;;
+        iptables)
+            log_warn "  iptables -A INPUT -p tcp --dport <端口> -j ACCEPT"
+            ;;
+    esac
+    echo ""
+
+    confirm "确认一键关闭防火墙?" "n" || { log_info "已取消"; return; }
+
+    case "$fw" in
+        ufw)
+            if ufw --force disable; then log_info "ufw 已关闭"; else log_error "ufw 关闭失败"; fi
+            ;;
+        firewalld)
+            systemctl stop firewalld && systemctl disable firewalld 2>/dev/null
+            log_info "firewalld 已停止并禁用开机自启"
+            ;;
+        iptables)
+            log_warn "iptables 没有官方的 disable 命令, 将清空所有规则并设置默认 ACCEPT 策略"
+            confirm "再次确认 (将丢失所有 iptables 规则)?" "n" || { log_info "已取消"; return; }
+            iptables -P INPUT ACCEPT
+            iptables -P FORWARD ACCEPT
+            iptables -P OUTPUT ACCEPT
+            iptables -F
+            iptables -X
+            log_info "iptables 已清空规则并设为全开放"
+            log_warn "注意: 重启后 iptables 规则可能由其他工具(如 netfilter-persistent)恢复"
+            ;;
+    esac
+}
+
 # ===== 客户端 proxies 管理 =====
 collect_existing_proxies_tsv() {
     # 转成 name<TAB>type<TAB>lip<TAB>lport<TAB>rport (去掉首列索引)
@@ -372,6 +493,7 @@ manage_menu() {
  10) 关闭开机自启
  11) 切换 Dashboard 开关 (仅服务端)
  12) 查看连接状态 (仅服务端, 需 Dashboard)
+ 13) 防火墙状态 / 一键关闭
   0) 退出
 EOM
         local choice
@@ -389,6 +511,7 @@ EOM
             10) op_disable ;;
             11) op_toggle_dashboard ;;
             12) op_show_connections ;;
+            13) op_firewall ;;
             0)  log_info "再见"; exit 0 ;;
             *)  log_warn "无效选项: $choice" ;;
         esac

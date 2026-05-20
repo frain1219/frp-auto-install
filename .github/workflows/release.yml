@@ -1,4 +1,4 @@
-name: Release latest
+name: Release
 
 on:
   push:
@@ -9,54 +9,91 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-latest
-  cancel-in-progress: true
+  group: release
+  cancel-in-progress: false  # 串行处理 push, 避免并发竞态时丢 tag
 
 jobs:
   release:
-    name: Build and publish rolling latest release
+    name: Build and publish dated release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 取全部历史用于生成 changelog
+
+      - name: Compute version
+        id: ver
+        run: |
+          # 版本格式: vYYYY.MM.DD-<7位sha>, 如 v2026.05.20-a1b2c3d
+          DATE=$(date -u +'%Y.%m.%d')
+          SHORT=$(git rev-parse --short=7 HEAD)
+          TAG="v${DATE}-${SHORT}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "short=${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "computed tag: ${TAG}"
+
+      - name: Skip if tag already exists
+        id: check
+        run: |
+          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "tag ${{ steps.ver.outputs.tag }} 已存在, 跳过"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install shellcheck
+        if: steps.check.outputs.skip != 'true'
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Build single-file installer
+        if: steps.check.outputs.skip != 'true'
         run: ./build.sh
 
       - name: Generate release notes
-        id: notes
+        if: steps.check.outputs.skip != 'true'
         run: |
+          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)
           {
-            echo "## frp-installer.sh — rolling \`latest\`"
+            echo "## frp-installer.sh — ${{ steps.ver.outputs.tag }}"
             echo ""
-            echo "由 main 分支自动构建发布,每次 push 滚动覆盖。"
-            echo ""
-            echo "**直接下载使用:**"
+            echo "**直接下载使用 (始终拉到最新版):**"
             echo ""
             echo '```bash'
-            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/frp-installer.sh -o frp-installer.sh"
-            echo "sudo bash frp-installer.sh"
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/frp-installer.sh | sudo bash"
             echo '```'
             echo ""
-            echo "### 本次构建"
+            echo "**锁定到当前版本:**"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.ver.outputs.tag }}/frp-installer.sh | sudo bash"
+            echo '```'
+            echo ""
+            echo "### 构建信息"
             echo ""
             echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- 时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- 构建时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
             echo "- 文件 sha256:"
             echo '```'
             sha256sum frp-installer.sh
             echo '```'
+            if [[ -n "$PREV_TAG" ]]; then
+              echo ""
+              echo "### 自上一版本 ($PREV_TAG) 的变更"
+              echo ""
+              git log --pretty=format:'- %s (%h)' "${PREV_TAG}..HEAD"
+            fi
           } > RELEASE_NOTES.md
 
-      - name: Publish rolling latest release
+      - name: Publish dated release
+        if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Latest build"
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_NOTES.md
           files: frp-installer.sh
           prerelease: false
-          make_latest: "true"
+          make_latest: "true"  # 标记为 latest, 自动让旧 release 失去 latest 标记 (但仍保留)

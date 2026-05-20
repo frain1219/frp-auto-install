@@ -27,7 +27,9 @@
 
 ### 一行下载并运行
 
-每次 main 分支推送都会通过 GitHub Actions 自动构建并发布到 `latest` release,可直接下载使用:
+每次 main 分支推送都会通过 GitHub Actions 自动构建并发布一个**独立的、不会被覆盖的** release (tag 格式: `vYYYY.MM.DD-<7位sha>`)。
+
+**始终拉最新版:**
 
 ```bash
 curl -fsSL https://github.com/frain1219/frp-auto-install/releases/latest/download/frp-installer.sh -o frp-installer.sh
@@ -39,6 +41,14 @@ sudo bash frp-installer.sh
 ```bash
 curl -fsSL https://github.com/frain1219/frp-auto-install/releases/latest/download/frp-installer.sh | sudo bash
 ```
+
+**锁定到历史某个版本** (老版本永久保留):
+
+```bash
+curl -fsSL https://github.com/frain1219/frp-auto-install/releases/download/v2026.05.20-a1b2c3d/frp-installer.sh -o frp-installer.sh
+```
+
+可在 [Releases](https://github.com/frain1219/frp-auto-install/releases) 页面查看所有历史版本及其变更日志。
 
 ### 服务端 (拥有公网 IP 的机器)
 
@@ -81,6 +91,7 @@ sudo frp-installer
  10) 关闭开机自启
  11) 切换 Dashboard 开关 (仅服务端)
  12) 查看连接状态 (仅服务端, 需 Dashboard)
+ 13) 防火墙状态 / 一键关闭
   0) 退出
 ```
 
