@@ -149,7 +149,7 @@ show_status() {
             print_kv "Dashboard 用户" "${dash_user}"
             print_kv "Dashboard 密码" "${dash_pass}"
         else
-            print_kv "Dashboard"    "未启用"
+            print_kv "Dashboard"    "未启用 (可在菜单 11) 切换开启)"
         fi
     else
         local server_addr server_port token

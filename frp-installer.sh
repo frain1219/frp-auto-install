@@ -554,7 +554,7 @@ show_status() {
             print_kv "Dashboard 用户" "${dash_user}"
             print_kv "Dashboard 密码" "${dash_pass}"
         else
-            print_kv "Dashboard"    "未启用"
+            print_kv "Dashboard"    "未启用 (可在菜单 11) 切换开启)"
         fi
     else
         local server_addr server_port token
@@ -675,6 +675,148 @@ op_change_token() {
     log_info "token 已更新并重启 ${svc}"
     print_kv "新 token" "$new_token"
     [[ "$ROLE" == "server" ]] && log_warn "请同步修改所有客户端的 auth.token, 否则连接将失败"
+}
+
+# ===== 服务端 Dashboard 与连接状态 =====
+read_frps_config_full() {
+    # 把 frps.toml 关键字段 echo 到全局变量, 供调用方使用
+    local cfg="${INSTALL_DIR}/frps.toml"
+    FRPS_BIND_PORT=$(read_toml_value "$cfg" "bindPort")
+    FRPS_TOKEN=$(read_toml_value "$cfg" "auth.token")
+    FRPS_DASH_PORT=$(read_toml_value "$cfg" "webServer.port")
+    FRPS_DASH_USER=$(read_toml_value "$cfg" "webServer.user")
+    FRPS_DASH_PASS=$(read_toml_value "$cfg" "webServer.password")
+}
+
+op_toggle_dashboard() {
+    load_meta || return
+    if [[ "$ROLE" != "server" ]]; then
+        log_warn "仅服务端支持开关 Dashboard"
+        return
+    fi
+    read_frps_config_full
+    if [[ -n "$FRPS_DASH_PORT" ]]; then
+        # 当前已启用 → 询问关闭
+        log_info "Dashboard 当前已启用 (端口 ${FRPS_DASH_PORT})"
+        confirm "确认关闭 Dashboard?" "n" || return
+        write_frps_config "$FRPS_BIND_PORT" "$FRPS_TOKEN" "no"
+        systemctl restart frps
+        log_info "Dashboard 已关闭并重启 frps"
+    else
+        # 当前未启用 → 询问开启
+        log_info "Dashboard 当前未启用"
+        confirm "确认开启 Dashboard?" "y" || return
+        local dash_port dash_user dash_pass
+        dash_port=$(ask_port "Dashboard 端口" "7500")
+        dash_user="admin"
+        dash_pass=$(gen_random 16)
+        write_frps_config "$FRPS_BIND_PORT" "$FRPS_TOKEN" "yes" "$dash_port" "$dash_user" "$dash_pass"
+        systemctl restart frps
+        log_info "Dashboard 已开启并重启 frps"
+        local ip
+        ip=$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || echo "<服务器公网IP>")
+        print_kv "Dashboard"     "http://${ip}:${dash_port}"
+        print_kv "Dashboard 用户" "${dash_user}"
+        print_kv "Dashboard 密码" "${dash_pass}"
+        log_warn "请放行服务器防火墙的 ${dash_port} 端口"
+    fi
+}
+
+dashboard_api_get() {
+    # dashboard_api_get <path>  → echo 响应 body, 失败时返回非零
+    # 复用 read_frps_config_full 已加载的 FRPS_DASH_* 变量
+    local path="$1"
+    curl -fsS --max-time 5 \
+        -u "${FRPS_DASH_USER}:${FRPS_DASH_PASS}" \
+        "http://127.0.0.1:${FRPS_DASH_PORT}${path}"
+}
+
+print_proxies_from_api() {
+    # print_proxies_from_api <proto>
+    # 解析 /api/proxy/<tcp|udp> 的 JSON 响应并打印表格
+    local proto="$1" json
+    json=$(dashboard_api_get "/api/proxy/${proto}") || { log_warn "  调用 ${proto} API 失败"; return; }
+    if ! command -v jq >/dev/null 2>&1; then
+        log_warn "  未安装 jq, 显示原始 JSON (建议: apt install jq):"
+        echo "$json"
+        return
+    fi
+    local count
+    count=$(echo "$json" | jq -r '.proxies | length')
+    if [[ "$count" == "0" || -z "$count" ]]; then
+        printf '  %s(无 %s 类型在线 proxy)%s\n' "$C_YELLOW" "$proto" "$C_RESET"
+        return
+    fi
+    printf '  %s%-16s %-8s %-12s %-10s %-12s %-12s%s\n' \
+        "$C_CYAN" "名称" "状态" "远程端口" "连接数" "今日入站" "今日出站" "$C_RESET"
+    echo "$json" | jq -r '
+        .proxies[] |
+        [
+            .name,
+            .status,
+            (.conf.remotePort // "-" | tostring),
+            (.curConns // 0 | tostring),
+            (.todayTrafficIn // 0 | tostring),
+            (.todayTrafficOut // 0 | tostring)
+        ] | @tsv
+    ' | while IFS=$'\t' read -r name status rport conns tin tout; do
+        local status_disp
+        case "$status" in
+            online)  status_disp="${C_GREEN}online${C_RESET}" ;;
+            offline) status_disp="${C_YELLOW}offline${C_RESET}" ;;
+            *)       status_disp="$status" ;;
+        esac
+        printf '  %-16s %-17s %-12s %-10s %-12s %-12s\n' \
+            "$name" "$status_disp" "$rport" "$conns" "$(human_bytes "$tin")" "$(human_bytes "$tout")"
+    done
+}
+
+human_bytes() {
+    # 简单字节转人类可读. 输入纯数字, 失败时原样输出.
+    local b="${1:-0}"
+    [[ "$b" =~ ^[0-9]+$ ]] || { echo "$b"; return; }
+    if   (( b < 1024 ));         then echo "${b}B"
+    elif (( b < 1048576 ));      then echo "$(( b / 1024 ))K"
+    elif (( b < 1073741824 ));   then echo "$(( b / 1048576 ))M"
+    else                              echo "$(( b / 1073741824 ))G"
+    fi
+}
+
+op_show_connections() {
+    load_meta || return
+    if [[ "$ROLE" != "server" ]]; then
+        log_warn "仅服务端支持查看连接状态 (Dashboard API)"
+        return
+    fi
+    read_frps_config_full
+    if [[ -z "$FRPS_DASH_PORT" ]]; then
+        log_warn "Dashboard 未启用, 无法查询连接状态"
+        log_warn "请先在管理菜单中开启 Dashboard"
+        return
+    fi
+    if ! systemctl is-active --quiet frps; then
+        log_warn "frps 未运行, 请先启动服务"
+        return
+    fi
+
+    log_step "服务器信息"
+    local info
+    info=$(dashboard_api_get "/api/serverinfo") || { log_error "无法连接 Dashboard API"; return; }
+    if command -v jq >/dev/null 2>&1; then
+        print_kv "frp 版本"     "$(echo "$info" | jq -r '.version // "-"')"
+        print_kv "在线客户端数" "$(echo "$info" | jq -r '.clientCounts // 0')"
+        print_kv "活跃 proxy 数" "$(echo "$info" | jq -r '.proxyCounts // 0')"
+        print_kv "总入站流量"   "$(human_bytes "$(echo "$info" | jq -r '.totalTrafficIn // 0')")"
+        print_kv "总出站流量"   "$(human_bytes "$(echo "$info" | jq -r '.totalTrafficOut // 0')")"
+    else
+        log_warn "未安装 jq, 显示原始 JSON:"
+        echo "$info"
+    fi
+
+    log_step "TCP Proxies"
+    print_proxies_from_api "tcp"
+    log_step "UDP Proxies"
+    print_proxies_from_api "udp"
 }
 
 # ===== 客户端 proxies 管理 =====
@@ -801,6 +943,8 @@ manage_menu() {
   8) 修改穿透信息 (仅客户端)
   9) 开启开机自启
  10) 关闭开机自启
+ 11) 切换 Dashboard 开关 (仅服务端)
+ 12) 查看连接状态 (仅服务端, 需 Dashboard)
   0) 退出
 EOM
         local choice
@@ -816,6 +960,8 @@ EOM
             8)  op_change_proxies ;;
             9)  op_enable ;;
             10) op_disable ;;
+            11) op_toggle_dashboard ;;
+            12) op_show_connections ;;
             0)  log_info "再见"; exit 0 ;;
             *)  log_warn "无效选项: $choice" ;;
         esac
